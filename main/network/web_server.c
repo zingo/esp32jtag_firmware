@@ -945,7 +945,11 @@ esp_err_t set_credentials_handler(httpd_req_t *req) {
         if (pbcfg_str) storage_write_session(h, PORT_B_CFG_KEY, pbcfg_str, strlen(pbcfg_str));
         if (pccfg_str) storage_write_session(h, PORT_C_CFG_KEY, pccfg_str, strlen(pccfg_str));
         if (pdcfg_str) storage_write_session(h, PORT_D_CFG_KEY, pdcfg_str, strlen(pdcfg_str));
-        if (targetVoltage_str) storage_write_session(h, TARGET_VOLTAGE_KEY, targetVoltage_str, strlen(targetVoltage_str));
+        if (targetVoltage_str) {
+            storage_write_session(h, TARGET_VOLTAGE_KEY, targetVoltage_str, strlen(targetVoltage_str));
+            int v = atoi(targetVoltage_str);
+            if (v >= 0 && v <= 4) gbl_vio_idx = (uint8_t)v;
+        }
         if (swMcu_str) storage_write_session(h, SW_MCU_KEY, swMcu_str, strlen(swMcu_str));
         if (wifi_changed) {
             if (wifiMode_str) storage_write_session(h, WIFI_MODE_KEY, wifiMode_str, strlen(wifiMode_str));
@@ -1797,6 +1801,12 @@ static esp_err_t portd_output_handler(httpd_req_t *req) {
 
     set_portd_output(mode, value);
 
+    /* Update LCD display cfg so pinout screen reflects the transient mode */
+    {
+        static const uint8_t mode_to_display[] = {0, 2, 3, 4}; /* tristate→0, counter_lo→2, counter_hi→3, gpio→4 */
+        gbl_pd_display_cfg = (mode < 4) ? mode_to_display[mode] : 0;
+    }
+
     static const char *mode_names[] = {"tristate", "counter_lo", "counter_hi", "gpio"};
     cJSON_AddStringToObject(root, "status", "ok");
     cJSON_AddStringToObject(root, "mode",   mode_names[mode]);
@@ -2366,6 +2376,17 @@ static esp_err_t portd_freq_handler(httpd_req_t *req)
     }
 
     set_portd_freq(freq_hz);
+
+    /* Update LCD display cfg for the frequency-based mode */
+    {
+        static const uint8_t freq_to_display[] = {0, 4, 5, 6, 7}; /* 0→0, 125→4, 250→5, 500→6, 1000→7 */
+        uint8_t idx = 0;
+        if      (freq_hz == 125)  idx = 1;
+        else if (freq_hz == 250)  idx = 2;
+        else if (freq_hz == 500)  idx = 3;
+        else if (freq_hz == 1000) idx = 4;
+        gbl_pd_display_cfg = freq_to_display[idx];
+    }
 
     cJSON_AddStringToObject(root, "status", "ok");
     cJSON_AddNumberToObject(root, "freq_hz", (double)freq_hz);

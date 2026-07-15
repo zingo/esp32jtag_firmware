@@ -59,6 +59,11 @@ What makes ESP32JTAG especially distinctive is its ability to work seamlessly wi
   - SRESET polarity (active HIGH / active LOW) and pulse width (1–5000 ms) configuration — applied without reboot via `POST /api/sreset_config`
   - Reboot into ROM bootloader mode from the web UI (`POST /reboot_bootloader`)
 
+- **Display (optional LCD)**
+  - Main status screen with WiFi / debug connection status
+  - Pinout screen showing current per-port wiring (wire colors, pin functions, VIO voltage)
+  - Cycle between screens with the SW1 / SW2 buttons
+
 - **Signal Generation (Port D)**
   - Provides signal stimulus to the target system via Port D pins
   - FPGA internal free-running counter output: bits [3:0] or [7:4] at 132 MHz
@@ -413,7 +418,7 @@ Key `sdkconfig` options:
 ```
 esp32jtag/
 ├── main/
-│   ├── main.c                  # Application entry point
+│   ├── main.c                  # Application entry point, LCD screens, button handling
 │   ├── types.h                 # Shared type definitions and NVS keys
 │   ├── esp32jtag_common.h      # Pin definitions and port enums
 │   ├── storage.c               # NVS read/write helpers

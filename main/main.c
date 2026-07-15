@@ -107,6 +107,8 @@ uint8_t gbl_pb_cfg = 0;
 uint8_t gbl_pc_cfg = 0;
 uint8_t gbl_pd_cfg = 0;
 bool gbl_usb_dap_enabled = true; /* cached USB CMSIS-DAP state (false = disabled), loaded from NVS */
+uint8_t gbl_pd_display_cfg = 0;  /* transient PD mode shown on LCD (0–7) */
+uint8_t gbl_vio_idx = 0;        /* cached VIO voltage index (0–4), updated on save */
 
 app_params_t g_app_params;
 
@@ -445,6 +447,7 @@ static void load_port_configurations(void)
     load_nvs_uint8(PORT_B_CFG_KEY, &gbl_pb_cfg, DEFAULT_PB_CFG);
     load_nvs_uint8(PORT_C_CFG_KEY, &gbl_pc_cfg, DEFAULT_PC_CFG);
     load_nvs_uint8(PORT_D_CFG_KEY, &gbl_pd_cfg, DEFAULT_PD_CFG);
+    gbl_pd_display_cfg = gbl_pd_cfg;
 
     // uart_port_sel is 'char', handled separately
     char *val = NULL;
@@ -993,24 +996,40 @@ esp_err_t set_portd_freq(uint32_t freq_hz)
 
 bool gbl_sw2_gpio48_flag = false;
 static bool g_force_dbg_redraw = false;
+static uint8_t g_lcd_screen = 0;  /* 0=main, 1=pinout */
+
 void check_sw1_sw2(void)
 {
-    static uint8_t L0 = 0, L48 = 0;    /* Previous GPIO levels, persist across calls */
+    static uint8_t L0 = 1, L48 = 1;    /* Previous GPIO levels, default high (unpressed) */
+    static int debug_counter = 0;
 
-    // Read the level of GPIO0
-    int level_0 = ael_board_has_valid_gpio(PIN_PUSHBUTTON_BOOT_SW1) ? gpio_get_level(PIN_PUSHBUTTON_BOOT_SW1) : 0;
+    int level_0 = ael_board_has_valid_gpio(PIN_PUSHBUTTON_BOOT_SW1) ? gpio_get_level(PIN_PUSHBUTTON_BOOT_SW1) : -1;
+    int level_48 = ael_board_has_valid_gpio(PIN_PUSHBUTTON_SW2) ? gpio_get_level(PIN_PUSHBUTTON_SW2) : -1;
 
-    // Read the level of GPIO48
-    int level_48 = ael_board_has_valid_gpio(PIN_PUSHBUTTON_SW2) ? gpio_get_level(PIN_PUSHBUTTON_SW2) : 0;
-
-    if(L0 != level_0 || L48 != level_48){
-        if(g_board->has_secondary_button && L48 != level_48 && level_48 == 1){
-            gbl_sw2_gpio48_flag = !gbl_sw2_gpio48_flag;
-        }
-        ESP_LOGI(TAG, "GPIO%d Level: %d | GPIO%d Level: %d gbl_sw2_gpio48_flag=%s",
+    /* Debug log every ~6 seconds (30 * 200ms) */
+    if (++debug_counter >= 30) {
+        debug_counter = 0;
+        ESP_LOGI(TAG, "SW1 GPIO%d=%d SW2 GPIO%d=%d screen=%d valid_sw1=%d valid_sw2=%d",
                 PIN_PUSHBUTTON_BOOT_SW1, level_0,
                 PIN_PUSHBUTTON_SW2, level_48,
-                gbl_sw2_gpio48_flag ? "True":"False");
+                g_lcd_screen,
+                ael_board_has_valid_gpio(PIN_PUSHBUTTON_BOOT_SW1),
+                ael_board_has_valid_gpio(PIN_PUSHBUTTON_SW2));
+    }
+
+    if(L0 != level_0 || L48 != level_48){
+        ESP_LOGW(TAG, "BUTTON CHANGE: SW1 GPIO%d=%d (was %d) SW2 GPIO%d=%d (was %d)",
+                PIN_PUSHBUTTON_BOOT_SW1, level_0, L0,
+                PIN_PUSHBUTTON_SW2, level_48, L48);
+        if(L0 != level_0 && level_0 == 0){
+            g_lcd_screen = (g_lcd_screen + 1) % 2;
+            ESP_LOGW(TAG, "SW1 pressed! screen=%d", g_lcd_screen);
+        }
+        if(g_board->has_secondary_button && L48 != level_48 && level_48 == 0){
+            gbl_sw2_gpio48_flag = !gbl_sw2_gpio48_flag;
+            g_lcd_screen = (g_lcd_screen + 1) % 2;
+            ESP_LOGW(TAG, "SW2 pressed! screen=%d", g_lcd_screen);
+        }
         L0 = level_0;
         L48 = level_48;
     }
@@ -1095,6 +1114,115 @@ static void draw_debug_status(void)
     }
 }
 
+/* Draw pin layout / port mode screen on LCD.
+ * Shows wire colors and pin functions for all 4 ports. */
+static void clear_screen(void)
+{
+    // TODO: using a block fill (e.g. Paint_ClearAll) caused the target to crash.
+    // This row-by-row space draw works but is slow.  Fix or replace the block-fill
+    // approach once the root cause is found.
+    for (int i = 0; i < LCD_HEIGHT; i += CURR_FONT.Height)
+        Paint_DrawString_EN(0, i, "                              ", &CURR_FONT, BLACK, BLACK);
+}
+
+static void draw_pinout_screen(void)
+{
+    if (!g_board->has_lcd)
+        return;
+
+    clear_screen();
+
+    static const char *ports[] = {"PA", "PB", "PC", "PD"};
+    static const uint16_t wire_colors[] = {RED, BROWN, GREEN, BLUE};
+    int pw = CURR_FONT.Width;
+
+    {
+        static const char *volt_labels[] = {"3.3V","2.5V","1.8V","1.5V","1.2V"};
+        int idx = gbl_vio_idx;
+        if (idx < 0 || idx >= 5) idx = 0;
+        char title[32];
+        /* leading spaces: LCD has curved corners so corner chars are hard to read */
+        snprintf(title, sizeof(title), "  PIN LAYOUT - VIO:%s", volt_labels[idx]);
+        Paint_DrawString_EN((LCD_WIDTH - (int)strlen(title) * pw) / 2, 5, title, &CURR_FONT, BLACK, CYAN);
+    }
+    int y = 5 + 18 + 3;
+    static const char *la_pins[4][4] = {
+        {"CH0", "CH1",  "CH2", "CH3"},
+        {"CH4", "CH5",  "CH6", "CH7"},
+        {"CH8", "CH9",  "CH10","CH11"},
+        {"CH12","CH13", "CH14","CH15"},
+    };
+    uint8_t cfgs[] = {gbl_pa_cfg, gbl_pb_cfg, gbl_pc_cfg, gbl_pd_cfg};
+    for (int i = 0; i < 4; i++) {
+        const char **pin;
+        switch (i) {
+            case 0: /* PA */
+                if (cfgs[i] == PA_LOGICANALYZER)
+                    pin = la_pins[0];
+                else if (cfgs[i] == PA_BMP_SWD)
+                    { static const char *p[] = {"SWCLK","SWDIO","-","-"}; pin = p; }
+                else
+                    { static const char *p[] = {"TCK","TMS","TDI","TDO"}; pin = p; }
+                break;
+            case 1: /* PB */
+                if (cfgs[i] == PB_LOGICANALYZER)
+                    pin = la_pins[1];
+                else
+                    { static const char *p[] = {"TX","Vtgr","RX","SRst"}; pin = p; }
+                break;
+            case 2: /* PC */
+                if (cfgs[i] == PC_LOGICANALYZER)
+                    pin = la_pins[2];
+                else
+                    { static const char *p[] = {"TDO","TCK","TMS","TDI"}; pin = p; }
+                break;
+            case 3: /* PD */
+                if (cfgs[i] == PD_LOGICANALYZER)
+                    pin = la_pins[3];
+                else
+                    { static const char *p[] = {"TDO","TCK","TMS","TDI"}; pin = p; }
+                break;
+        }
+        int dy = y + 16;
+        int x = X_OFFSET;
+        char label[5];
+        snprintf(label, sizeof(label), "%s:", ports[i]);
+        Paint_DrawString_EN(x, dy, label, &CURR_FONT, BLACK, GRAY);
+        x += 4 * pw + 3;
+        for (int j = 0; j < 4; j++) {
+            Paint_DrawString_EN(x, dy, pin[j], &CURR_FONT, BLACK, wire_colors[j]);
+            x += 4 * pw + 3;
+        }
+        if (i == 3) {
+            static const char *pd_modes[] = {"LA (input)","FPGA XVC","Counter Lo","Counter Hi","125 Hz","250 Hz","500 Hz","1 kHz"};
+            const char *mode = (gbl_pd_display_cfg < 8) ? pd_modes[gbl_pd_display_cfg] : "?";
+            int row_w = 5 * (4 * pw + 3);
+            int tx = X_OFFSET + (row_w - strlen(mode) * pw) / 2;
+            Paint_DrawString_EN(tx, dy + CURR_FONT.Height + 2, mode, &CURR_FONT, BLACK, GRAY);
+        }
+        y += 47;
+    }
+}
+
+static void draw_main_screen(void)
+{
+    if (!g_board->has_lcd)
+        return;
+    clear_screen();
+    draw_wifi_startup_info();
+    if (g_app_params.mode == APP_MODE_STA || g_app_params.mode == APP_MODE_AP) {
+        char ip_buf[16] = {0};
+        if (g_app_params.mode == APP_MODE_STA)
+            network_get_my_ip(ip_buf);
+        else
+            get_ap_ip_str(ip_buf, sizeof(ip_buf));
+        Paint_DrawString_EN(X_OFFSET, 10 + 24, "IP:", &CURR_FONT, BLACK, YELLOW);
+        Paint_DrawString_EN(X_OFFSET + 17 * 5, 10 + 24, ip_buf, &CURR_FONT, BLACK, MAGENTA);
+    }
+    draw_port_cfg_info();
+    Paint_DrawString_EN(X_OFFSET, LCD_HEIGHT - CURR_FONT.Height - 5, "No hot-plug! Power off", &CURR_FONT, BLACK, RED);
+}
+
 /* Start background tasks (GDB, logic analyser, XVC). */
 static void start_background_tasks(void)
 {
@@ -1161,6 +1289,7 @@ void app_main(void) {
             free(volt_str);
             if (idx >= 0 && idx < (int)VIO_DUTY_TABLE_SIZE) {
                 pwm1_duty = vio_duty_table[idx];
+                gbl_vio_idx = (uint8_t)idx;
             }
         }
         /* If key absent (fresh flash or after factory reset): pwm1_duty stays INITIAL_VIO_DUTY = 3.3V */
@@ -1306,17 +1435,50 @@ _wait:
     }
 
     ESP_LOGI(TAG, "[APP] Free memory: %lu bytes", esp_get_free_heap_size());
+    int loop_count = 0;
+    uint8_t prev_screen = 0;
     while (true) {
-        ESP_LOGI(TAG, "Free internal and DMA memory: %d %d",
-                heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                heap_caps_get_free_size(MALLOC_CAP_DMA));
+        check_sw1_sw2();
 
-        if (g_app_params.mode == APP_MODE_AP && g_board->has_lcd) {
-            print_sta_info();
+        if (g_lcd_screen != prev_screen) {
+            if (g_lcd_screen == 0 && g_board->has_lcd) {
+                g_force_dbg_redraw = true;
+                draw_main_screen();
+            } else if (g_lcd_screen == 1 && g_board->has_lcd) {
+                draw_pinout_screen();
+            }
+            prev_screen = g_lcd_screen;
         }
 
-        draw_debug_status();
-        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        /* Periodic updates on main screen */
+        if (g_lcd_screen == 0) {
+            if (g_app_params.mode == APP_MODE_AP && g_board->has_lcd) {
+                print_sta_info();
+            }
+            draw_debug_status();
+        }
+        /* Redraw pinout screen only when port configs change */
+        if (g_lcd_screen == 1 && g_board->has_lcd) {
+            static uint8_t prev_cfgs[4];
+            static uint8_t prev_pd_display = 0;
+            uint8_t cur_cfgs[] = {gbl_pa_cfg, gbl_pb_cfg, gbl_pc_cfg, gbl_pd_cfg};
+            if (cur_cfgs[0] != prev_cfgs[0] || cur_cfgs[1] != prev_cfgs[1] ||
+                cur_cfgs[2] != prev_cfgs[2] || cur_cfgs[3] != prev_cfgs[3] ||
+                gbl_pd_display_cfg != prev_pd_display) {
+                draw_pinout_screen();
+                for (int k = 0; k < 4; k++) prev_cfgs[k] = cur_cfgs[k];
+                prev_pd_display = gbl_pd_display_cfg;
+            }
+        }
+
+        if (++loop_count >= 15) {
+            loop_count = 0;
+            ESP_LOGI(TAG, "Free mem: %d %d",
+                    heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                    heap_caps_get_free_size(MALLOC_CAP_DMA));
+        }
+
+        vTaskDelay(200 / portTICK_PERIOD_MS);
     }
 
     esp_restart();

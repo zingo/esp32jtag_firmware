@@ -78,6 +78,8 @@ bool sreset_is_asserted(void);
 esp_err_t set_portd_output(uint8_t mode, uint8_t value); /* mode: PORTD_OUT_* */
 esp_err_t set_portd_freq(uint32_t freq_hz); /* 0=stop+tristate, 125/250/500/1000=Hz square wave */
 
+extern uint8_t gbl_pd_display_cfg; // transient PD mode shown on LCD
+extern uint8_t gbl_vio_idx;       // cached VIO voltage index (0–4)
 extern uint8_t global_data_reg_0; //defined in main/main.c
 extern uint8_t global_data_reg_1;//bit 7 to set wr_and_rd or rread only, bit 6 to 0 reserved
 esp_err_t set_cfga(bool use_porta, bool use_portb, bool use_portc, bool use_portd, bool njtag_swdio, bool swd_gpio);
