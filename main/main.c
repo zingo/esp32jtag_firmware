@@ -29,6 +29,7 @@
 #include "network_mngr_ota.h"
 #include "web_server.h"
 #include "uart_websocket.h"
+#include "console_menu.h"
 #include "../components/lcd/lcd_library.h"
 #include "GUI_Paint.h"
 #include "gdb_main.h"
@@ -1268,6 +1269,8 @@ void app_main(void) {
     esp_log_level_set(TAG, ESP_LOG_INFO);
     ESP_LOGI(TAG, "Board profile: %s", g_board->name);
     init_idf_components();
+
+    console_menu_init();
 
     gbl_spi_rxbuf = heap_caps_malloc(2048, MALLOC_CAP_DMA);
     assert(gbl_spi_rxbuf);

@@ -110,6 +110,7 @@ extern uint32_t gbl_sample_rate;
 extern bool gbl_trigger_enabled;
 extern bool gbl_trigger_mode_or;
 extern uint8_t gbl_sreset_polarity; /* 0=active HIGH, 1=active LOW */
+extern uint32_t gbl_sreset_pulse_ms; /* SRESET pulse width in ms */
 extern trigger_edge_t gbl_channel_triggers[16];
 extern uint8_t gbl_sample_rate_reg;
 

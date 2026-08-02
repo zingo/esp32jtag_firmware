@@ -12,6 +12,7 @@ What makes ESP32JTAG especially distinctive is its ability to work seamlessly wi
 | XVC Server | Enable remote JTAG access via Xilinx Virtual Cable |
 | Signal Generation | Provide digital stimulus signals for testing and validation |
 | Web-Based Interface | Configure and operate the device from a browser |
+| Serial Console | Configure everything from the USB Serial JTAG terminal |
 | AI-Driven Workflow Support | Integrates with AEL for closed-loop embedded development |
 
 
@@ -74,6 +75,12 @@ What makes ESP32JTAG especially distinctive is its ability to work seamlessly wi
 - **UART / USB**
   - USB CDC or WebSocket-based UART bridge
   - Configurable baud rate, data bits, stop bits, parity
+
+- **Serial Console (USB Serial JTAG)**
+  - Stateless REPL command line on the same USB port that carries boot logs
+  - Flat commands mirroring the web UI — every setting and action is one command, ideal for scripting
+  - `help` lists all commands; each setting command takes its value as an argument (no args shows current value)
+  - Use `log` to toggle ESP32JTAG Firmware serial log on/off, turning it temporary off makes the consol more usable.
 
 ---
 
@@ -311,6 +318,72 @@ The settings are applied immediately via `POST /api/sreset_config` and survive u
 
 ---
 
+## Serial Console (USB Serial JTAG)
+
+The firmware provides an ESP-IDF console REPL on the same USB Serial JTAG port
+that carries the boot/log output, so a device without network access (or without
+the web UI) can still be fully configured from a terminal.
+
+The console is a flat, stateless command set — every setting is one command with
+its value as an argument, so it is easy to script and safe to use non-interactively.
+
+Connect a terminal emulator to the USB Serial JTAG device:
+
+```bash
+idf.py monitor                      # if the ESP-IDF environment is set up
+python -m serial.tools.miniterm /dev/ttyACM0 115200 --eol CR
+```
+
+> **Line endings:** the console expects Enter to be sent as CR (`\r`). If input
+> appears to be ignored, check that your terminal sends CR (not LF) on Enter.
+> Boot and status logs are interleaved with the console output by design; use
+> `log off` to mute them.
+
+### Commands
+
+`help` lists every command. Setting commands invoked without a value print the
+current value plus usage (they never change state with no arguments).
+
+| Command | Description |
+|---|---|
+| **Info** | |
+| `show` | Print all current settings, including OTA partition status |
+| `log [off\|on]` | Mute/restore interleaved log output; no argument toggles |
+| **Configuration** | |
+| `porta <mode>` | Port A mode: `0` Logic Analyzer, `2` BMP SWD, `3` BMP JTAG |
+| `portb <mode>` | Port B mode: `0` Logic Analyzer, `1` Vtarget + UART + SReset |
+| `portc <mode>` | Port C mode: `0` LA, `1` BMP SWD/JTAG, `2` FPGA JTAG CFG, `3` FPGA SPI CFG |
+| `portd <mode>` | Port D mode: `0` LA, `1` XVC, `2` FPGA JTAG GPIO, `3` FPGA SPI GPIO |
+| `portd_output <mode> <value 0-15>` | Set Port D pin drive. Mode: `0` tristate (LA input, default), `1` counter_lo (132 MHz counter bits [3:0]), `2` counter_hi (counter bits [7:4]), `3` gpio (drive pins with `value`). Requires Port D in Logic Analyzer mode |
+| `portd_freq <0\|125\|250\|500\|1000>` | Set Port D square-wave frequency in Hz (0 = off) |
+| `vio <3.3\|2.5\|1.8\|1.5\|1.2>` | Target IO voltage (`v` suffix optional, e.g. `vio 1.8v`) |
+| `uart_baud <300-3000000>` | UART baud rate |
+| `uart_dbits <5-8>` | UART data bits |
+| `uart_sbits <1\|1.5\|2>` | UART stop bits |
+| `uart_parity <n\|e\|o>` | UART parity (none/even/odd) |
+| `uart_psel <0\|1>` | UART port select: `0` USB, `1` Web |
+| `usb_dap <0\|1>` | `1` disables the USB CMSIS-DAP interface |
+| `sreset <polarity> [pulse_ms]` | SRESET polarity (`0` high, `1` low) and optional pulse width in ms |
+| `wifi_mode <AP\|SM>` | WiFi mode: AP (access point) or SM (station/managed) |
+| `wifi_ssid <name>` | WiFi SSID |
+| `wifi_pass <password>` | WiFi password |
+| `ota_url <url>` | OTA update URL |
+| `web_user <name>` / `web_pass <password>` | Web UI basic-auth credentials |
+| **Actions (reset / reboot)** | |
+| `reset_target` | Send an SRESET pulse to the target (requires Port B in SReset mode) |
+| `ota_switch` | Switch to the alternate OTA partition and reboot |
+| `factory_reset yes` | Erase all settings and reboot (requires explicit `yes`) |
+| `reboot` | Reboot the device |
+
+Settings that require a reboot to take effect print a `[!] A reboot is required`
+notice after the change.
+
+Guards are enforced: `reset_target` and the Port D actions refuse to run unless
+the relevant port is in the required mode, and destructive actions
+(`factory_reset`, `ota_switch`) require confirmation or warn before proceeding.
+
+---
+
 ## Debugging
 
 ### BlackMagic Probe (BMP)
@@ -380,19 +453,21 @@ The bitstream (`main/ice40up5k/bitstream.bin`) is embedded in the firmware and l
 
 | Key | Description |
 |---|---|
-| `ssid` / `pass` | WiFi STA credentials |
-| `ap_ssid` / `ap_pass` | WiFi AP credentials |
-| `wifi_mode` | `ap` or `sta` |
-| `file` | Target config file |
-| `rtos` | RTOS type |
-| `smp` | Dual-core enable (`1` or `3`) |
-| `flash` | Flash support (`auto` or `0`) |
-| `interface` | `0`=JTAG, `1`=SWD |
-| `debug` | Debug level (`1`–`5`) |
 | `pa_cfg` … `pd_cfg` | Port A–D mode |
+| `target_voltage` | Target IO voltage index (`0`=3.3V … `4`=1.2V) |
+| `sw_mcu` | Software MCU mode (`0`/`1`) |
+| `mcu_if` | MCU interface (fixed to `GPIO`) |
+| `ssid` / `pass` | WiFi STA (SM mode) credentials |
+| `ap_ssid` / `ap_pass` | WiFi AP credentials |
+| `wifi_mode` | WiFi mode: `AP` or `SM` |
+| `ota_url_key` | OTA update URL |
+| `web_user` / `web_pass` | Web UI basic-auth credentials |
 | `uart_baud` | UART baud rate |
-| `uart_psel` | UART port (`0`=USB CDC, `1`=WebSocket) |
-| `dis_usb_dap` | Disable USB DAP interface |
+| `uart_dbits` | UART data bits |
+| `uart_sbits` | UART stop bits |
+| `uart_parity` | UART parity (`n`/`e`/`o`) |
+| `uart_psel` | UART port (`0`=USB, `1`=Web) |
+| `dis_usb_dap` | Disable USB CMSIS-DAP interface (`1`=disabled, `0`=enabled) |
 
 ---
 
@@ -419,6 +494,8 @@ Key `sdkconfig` options:
 esp32jtag/
 ├── main/
 │   ├── main.c                  # Application entry point, LCD screens, button handling
+│   ├── console_menu.c          # USB Serial JTAG console REPL + flat commands
+│   ├── console_menu.h          # console_menu_init() declaration
 │   ├── types.h                 # Shared type definitions and NVS keys
 │   ├── esp32jtag_common.h      # Pin definitions and port enums
 │   ├── storage.c               # NVS read/write helpers

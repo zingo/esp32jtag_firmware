@@ -25,3 +25,6 @@ components/jimtcl/tmp/
 dependencies.lock
 managed_components/
 components/jimtcl/src/
+
+__pycache__/
+*.pyc

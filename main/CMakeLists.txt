@@ -9,6 +9,7 @@ set(sources
     network/network_mngr_ota.c
     network/descriptors.c
     network/uart_websocket.c
+    console_menu.c
     boards/board_profile.c
     gpio_loopback_test.c
 )
